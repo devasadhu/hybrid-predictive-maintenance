@@ -1,0 +1,21 @@
+```gitignore
+# Python virtual environment
+venv/
+
+# sample file too large
+/data/simulated_dataset.csv
+
+# Bytecode files
+__pycache__/
+*.py[cod]
+
+# Jupyter Notebook checkpoints (if any)
+.ipynb_checkpoints/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
