@@ -1,7 +1,19 @@
-pandas
-numpy
-scikit-learn
-streamlit
-joblib
-plotly
-psutil
+# Core ML & Data Processing
+pandas>=1.5.0
+numpy>=1.23.0
+scikit-learn>=1.1.0
+joblib>=1.2.0
+
+# Visualization & Dashboard
+streamlit>=1.28.0
+plotly>=5.14.0
+
+# Data Generation & Utilities
+tqdm>=4.65.0
+
+# Physics-Informed Neural Network
+tensorflow>=2.12.0
+keras>=2.12.0
+
+matplotlib>=3.7.0
+seaborn>=0.12.0   # optional, for nicer plots

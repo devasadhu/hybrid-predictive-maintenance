@@ -11,6 +11,7 @@ from utils import rolling_features
 # --- Set BASE_DIR relative to this script ---
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DATA_PATH = os.path.join(BASE_DIR, "data", "simulated_dataset.csv")
+ENHANCED_DATA_PATH = os.path.join(BASE_DIR, "data", "simulated_dataset_enhanced.csv")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 os.makedirs(MODELS_DIR, exist_ok=True)
@@ -49,13 +50,142 @@ def create_sample_files(df):
             run_data.to_csv(sample_path, index=False)
             print(f"   Saved sample run {run_id} to {sample_path}")
 
+def generate_enhanced_dataset(df, rul_model, fm_model, feature_cols):
+    """Generate enhanced dataset for fleet dashboard with realistic distribution"""
+    print("\n📊 Generating enhanced fleet dataset...")
+    
+    fleet_data = []
+    turbine_ids = df["run_id"].unique()
+    
+    for turbine_id in turbine_ids:
+        turbine_df = df[df["run_id"] == turbine_id].copy()
+        turbine_df = turbine_df.sort_values("t").reset_index(drop=True)
+        
+        # Take last window for prediction
+        window = 12
+        if len(turbine_df) < window:
+            sub = turbine_df
+        else:
+            sub = turbine_df.iloc[-window:]
+        
+        try:
+            # Calculate rolling features
+            features = rolling_features(sub, SENSOR_COLS, window=min(window, len(sub))).to_dict()
+            
+            # Add latest sensor readings
+            for col in SENSOR_COLS:
+                features[f"{col}_latest"] = sub[col].iloc[-1]
+            
+            features_df = pd.DataFrame([features])
+            
+            # Ensure all required features are present
+            for col in feature_cols:
+                if col not in features_df.columns:
+                    features_df[col] = 0
+            
+            # Reorder columns to match training
+            features_df = features_df[feature_cols]
+            
+            # Make predictions
+            rul_pred = rul_model.predict(features_df)[0]
+            fm_pred = fm_model.predict(features_df)[0]
+            fm_proba = fm_model.predict_proba(features_df)[0]
+            
+            # Get the probability of the predicted failure mode
+            fm_pred_idx = list(fm_model.classes_).index(fm_pred)
+            risk_probability = fm_proba[fm_pred_idx] * 100
+            
+            # Determine status based on RUL
+            if rul_pred < 20:
+                status = "CRITICAL"
+            elif rul_pred < 50:
+                status = "WARNING"
+            else:
+                status = "NORMAL"
+            
+            # Get latest sensor readings
+            latest_readings = turbine_df.iloc[-1]
+            
+            # Create fleet entry
+            fleet_entry = {
+                "Turbine ID": f"TURB-{turbine_id:03d}",
+                "RUL (hours)": max(0, int(rul_pred)),
+                "Status": status,
+                "Top Risk": fm_pred,
+                "Risk Probability (%)": risk_probability,
+                "Operating Hours": int(latest_readings["t"]),
+                "Temperature": round(latest_readings["temperature"], 2),
+                "Vibration": round(latest_readings["vibration"], 2),
+                "Pressure": round(latest_readings["pressure"], 2),
+                "Flow": round(latest_readings["flow"], 2),
+                "Power": round(latest_readings["power"], 2)
+            }
+            
+            fleet_data.append(fleet_entry)
+            
+        except Exception as e:
+            print(f"⚠️  Error processing turbine {turbine_id}: {e}")
+            continue
+    
+    # Create DataFrame
+    fleet_df = pd.DataFrame(fleet_data)
+    
+    # Create realistic distribution: 60% NORMAL, 25% WARNING, 15% CRITICAL
+    print("\n🔧 Creating realistic health distribution...")
+    n_turbines = len(fleet_df)
+    n_normal = int(n_turbines * 0.60)
+    n_warning = int(n_turbines * 0.25)
+    n_critical = n_turbines - n_normal - n_warning
+    
+    # Shuffle indices
+    indices = np.random.permutation(n_turbines)
+    
+    # Assign CRITICAL turbines (RUL: 1-20 hours)
+    for idx in indices[:n_critical]:
+        rul = np.random.randint(1, 21)
+        fleet_df.loc[idx, "RUL (hours)"] = rul
+        fleet_df.loc[idx, "Status"] = "CRITICAL"
+        # Increase sensor readings to show degradation
+        fleet_df.loc[idx, "Temperature"] += np.random.uniform(5, 15)
+        fleet_df.loc[idx, "Vibration"] += np.random.uniform(0.5, 1.5)
+        fleet_df.loc[idx, "Risk Probability (%)"] = np.random.uniform(75, 95)
+    
+    # Assign WARNING turbines (RUL: 21-50 hours)
+    for idx in indices[n_critical:n_critical+n_warning]:
+        rul = np.random.randint(21, 51)
+        fleet_df.loc[idx, "RUL (hours)"] = rul
+        fleet_df.loc[idx, "Status"] = "WARNING"
+        # Moderate increase in sensor readings
+        fleet_df.loc[idx, "Temperature"] += np.random.uniform(2, 8)
+        fleet_df.loc[idx, "Vibration"] += np.random.uniform(0.2, 0.8)
+        fleet_df.loc[idx, "Risk Probability (%)"] = np.random.uniform(50, 75)
+    
+    # Assign NORMAL turbines (RUL: 51-150 hours)
+    for idx in indices[n_critical+n_warning:]:
+        rul = np.random.randint(51, 151)
+        fleet_df.loc[idx, "RUL (hours)"] = rul
+        fleet_df.loc[idx, "Status"] = "NORMAL"
+        fleet_df.loc[idx, "Risk Probability (%)"] = np.random.uniform(20, 50)
+    
+    # Save enhanced dataset
+    fleet_df.to_csv(ENHANCED_DATA_PATH, index=False)
+    print(f"✅ Enhanced dataset saved to {ENHANCED_DATA_PATH}")
+    print(f"📊 Generated data for {len(fleet_df)} turbines")
+    print(f"\nStatus distribution:")
+    print(fleet_df["Status"].value_counts())
+    print(f"\nFailure mode distribution:")
+    print(fleet_df["Top Risk"].value_counts())
+    
+    return fleet_df
+
 if __name__ == "__main__":
     print("📂 Loading data...")
     
     if not os.path.exists(DATA_PATH):
         print("Data not found, generating dataset...")
-        from data_sim import make_dataset
-        df = make_dataset(n_runs=120, run_length=150)
+        from data_sim import make_fleet_dataset, create_legacy_compatible_dataset
+        df_full = make_fleet_dataset(n_turbines=120, run_length=150)
+        df = create_legacy_compatible_dataset(df_full)
         df.to_csv(DATA_PATH, index=False)
         print(f"Dataset saved to {DATA_PATH}")
     else:
@@ -135,5 +265,8 @@ if __name__ == "__main__":
 
     create_sample_files(df)
 
+    # Generate enhanced dataset for fleet dashboard
+    generate_enhanced_dataset(df, rul_model, fm_model, list(X.columns))
+
     print("\n🎉 Training completed successfully!")
-    print("Run your app with: streamlit run src/app.py")
+    print("Run your app with: streamlit run src/master_dashboard.py")
